@@ -1,3 +1,8 @@
+import csv
+import json
+import os
+import shutil
+import subprocess
 import time
 
 import numpy as np
@@ -19,6 +24,71 @@ from prepare import (
     seed_everything,
     summarize_evals,
 )
+
+
+SEGMENT_STEPS = 1_000_000
+
+_SEGMENT_COLS = [
+    "segment", "global_step", "commit", "eval_success_rate", "eval_return_mean",
+    "auc_success_per_mstep", "SPS", "approx_kl", "clipfrac", "entropy",
+    "value_loss", "policy_loss", "explained_variance", "wall_time_sec",
+    "status", "description",
+]
+
+
+def _append_segment_metrics(run_name, segment, eval_metrics, diag, eval_history, start_time):
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except Exception:
+        commit = ""
+
+    successes = [(e["global_step"], e.get("success_rate", 0.0))
+                 for e in eval_history if "success_rate" in e]
+    if len(successes) >= 2:
+        xs, ys = [s for s, _ in successes], [r for _, r in successes]
+        area = sum((xs[k+1]-xs[k])*(ys[k]+ys[k+1])/2 for k in range(len(xs)-1))
+        auc = area / max(xs[-1] - xs[0], 1)
+    else:
+        auc = successes[-1][1] if successes else 0.0
+
+    wall_time_sec = time.time() - start_time
+    gs = int(eval_metrics.get("global_step", 0))
+    sps = int(gs / max(wall_time_sec, 1e-9))
+
+    def _fmt(v):
+        return "" if (v is None or (isinstance(v, float) and np.isnan(v))) else v
+
+    row = {
+        "segment": segment,
+        "global_step": gs,
+        "commit": commit,
+        "eval_success_rate": _fmt(eval_metrics.get("success_rate")),
+        "eval_return_mean": _fmt(eval_metrics.get("return_mean")),
+        "auc_success_per_mstep": round(auc, 6),
+        "SPS": sps,
+        "approx_kl": _fmt(diag.get("approx_kl")),
+        "clipfrac": _fmt(diag.get("clipfrac")),
+        "entropy": _fmt(diag.get("entropy")),
+        "value_loss": _fmt(diag.get("value_loss")),
+        "policy_loss": _fmt(diag.get("policy_loss")),
+        "explained_variance": _fmt(diag.get("explained_variance")),
+        "wall_time_sec": round(wall_time_sec, 1),
+        "status": "segment_done",
+        "description": "",
+    }
+
+    tsv_path = f"runs/{run_name}/segment_metrics.tsv"
+    jsonl_path = f"runs/{run_name}/segment_metrics.jsonl"
+    write_header = not os.path.exists(tsv_path)
+    with open(tsv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_SEGMENT_COLS, delimiter="\t")
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+    with open(jsonl_path, "a") as f:
+        f.write(json.dumps(row) + "\n")
 
 
 def main():
@@ -52,10 +122,28 @@ def main():
 
     clip_action = make_action_clipper(envs, device)
 
-    if args.checkpoint:
+    ckpt_dir = f"runs/{run_name}/checkpoints"
+    latest_ckpt = os.path.join(ckpt_dir, "latest.pt")
+
+    if os.path.exists(latest_ckpt):
+        ckpt = torch.load(latest_ckpt, map_location=device)
+        agent.load_state_dict(ckpt["agent"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        global_step = ckpt["global_step"]
+        print(f"Resumed from {latest_ckpt}: global_step={global_step}")
+    elif args.checkpoint:
         agent.load_state_dict(torch.load(args.checkpoint, map_location=device))
 
+    segment_end_step = min(global_step + SEGMENT_STEPS, args.total_timesteps)
+    print(f"Segment: global_step={global_step} -> {segment_end_step}")
+
     eval_history = []
+    _eval_count = 0
+    tsv_path = f"runs/{run_name}/segment_metrics.tsv"
+    if os.path.exists(tsv_path):
+        with open(tsv_path) as f:
+            _eval_count = max(0, sum(1 for _ in f) - 1)
+    _last_diag: dict = {}
 
     for iteration in range(1, args.num_iterations + 1):
         print(f"Epoch: {iteration}, global_step={global_step}")
@@ -66,16 +154,17 @@ def main():
             eval_history.append(metrics)
             if args.evaluate:
                 break
+            _eval_count += 1
+            _append_segment_metrics(run_name, _eval_count, metrics, _last_diag, eval_history, start_time)
 
         if args.save_model and iteration % args.eval_freq == 1:
             model_path = f"runs/{run_name}/ckpt_{iteration}.pt"
             torch.save(agent.state_dict(), model_path)
             print(f"model saved to {model_path}")
 
-        if args.anneal_lr:
-            frac = 1.0 - (iteration - 1.0) / args.num_iterations
-            lrnow = frac * args.learning_rate
-            optimizer.param_groups[0]["lr"] = lrnow
+        # Anneal LR over the full 20M-step run; floor at 10% for final segments
+        lr_frac = max(1.0 - global_step / args.total_timesteps, 0.10)
+        optimizer.param_groups[0]["lr"] = lr_frac * args.learning_rate
 
         rollout_time = time.time()
         agent.eval()
@@ -199,12 +288,15 @@ def main():
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                ent_coef = 0.02  # restore for final 3 segs; entropy stable ~-1.02, strengthen signal
+                loss = pg_loss - ent_coef * entropy_loss + v_loss * args.vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
+                with torch.no_grad():
+                    agent.actor_logstd.clamp_(min=-1.65)  # restore: unclamped seg caused -1.10->-2.03 collapse
 
             if early_stop:
                 break
@@ -216,6 +308,15 @@ def main():
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
         sps = int(global_step / (time.time() - start_time))
+
+        _last_diag = {
+            "approx_kl": float(approx_kl.item()),
+            "clipfrac": float(np.mean(clipfracs)) if clipfracs else float("nan"),
+            "entropy": float(entropy_loss.item()),
+            "value_loss": float(v_loss.item()),
+            "policy_loss": float(pg_loss.item()),
+            "explained_variance": float(explained_var),
+        }
 
         if logger is not None:
             logger.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
@@ -234,15 +335,26 @@ def main():
 
         print("SPS:", sps)
 
+        if global_step >= segment_end_step:
+            break
+
     if not args.evaluate:
         # Final deterministic eval so the summary always reflects the final policy.
         metrics = evaluate_policy(agent, eval_envs, args, device, global_step, logger, start_time)
         eval_history.append(metrics)
+        _eval_count += 1
+        _append_segment_metrics(run_name, _eval_count, metrics, _last_diag, eval_history, start_time)
 
         if args.save_model:
-            model_path = f"runs/{run_name}/final_ckpt.pt"
-            torch.save(agent.state_dict(), model_path)
-            print(f"model saved to {model_path}")
+            os.makedirs(ckpt_dir, exist_ok=True)
+            if os.path.exists(latest_ckpt):
+                shutil.copy2(latest_ckpt, os.path.join(ckpt_dir, "before_segment.pt"))
+            torch.save({"global_step": global_step, "agent": agent.state_dict(), "optimizer": optimizer.state_dict()}, latest_ckpt)
+            print(f"Segment checkpoint saved: {latest_ckpt} (global_step={global_step})")
+            if global_step >= args.total_timesteps:
+                model_path = f"runs/{run_name}/final_ckpt.pt"
+                torch.save(agent.state_dict(), model_path)
+                print(f"model saved to {model_path}")
         if logger is not None:
             logger.close()
 
