@@ -297,7 +297,7 @@ def main():
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
                 with torch.no_grad():
-                    agent.actor_logstd.clamp_(min=-1.85)  # lock entropy at current equilibrium ~-3.44
+                    agent.actor_logstd.clamp_(min=-1.75)  # hard-lock entropy floor at current equilibrium ~-2.65
 
             if early_stop:
                 break
