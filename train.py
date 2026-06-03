@@ -295,6 +295,8 @@ def main():
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
+                with torch.no_grad():
+                    agent.actor_logstd.clamp_(min=-2.0)  # floor entropy ~-4 for 8-dim action
 
             if early_stop:
                 break
