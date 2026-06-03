@@ -162,8 +162,8 @@ def main():
             torch.save(agent.state_dict(), model_path)
             print(f"model saved to {model_path}")
 
-        # Anneal LR over the full 20M-step run; floor at 5% to keep critic fitting
-        lr_frac = max(1.0 - global_step / args.total_timesteps, 0.05)
+        # Anneal LR over the full 20M-step run; floor at 10% for final segments
+        lr_frac = max(1.0 - global_step / args.total_timesteps, 0.10)
         optimizer.param_groups[0]["lr"] = lr_frac * args.learning_rate
 
         rollout_time = time.time()
