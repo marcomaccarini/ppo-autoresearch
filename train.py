@@ -296,6 +296,8 @@ def main():
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
+                with torch.no_grad():
+                    agent.actor_logstd.clamp_(min=-1.65)  # restore: unclamped seg caused -1.10->-2.03 collapse
 
             if early_stop:
                 break
