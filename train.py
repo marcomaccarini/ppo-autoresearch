@@ -262,7 +262,7 @@ def main():
                     approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs.append(((ratio - 1.0).abs() > args.clip_coef).float().mean().item())
 
-                eff_target_kl = 0.025  # slight relaxation from 0.02; clipfrac stable at 0.15-0.19
+                eff_target_kl = 0.02  # conservative for second half; clipfrac hit 0.23 at 0.025
                 if approx_kl > eff_target_kl:
                     early_stop = True
                     break
