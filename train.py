@@ -262,7 +262,8 @@ def main():
                     approx_kl = ((ratio - 1) - logratio).mean()
                     clipfracs.append(((ratio - 1.0).abs() > args.clip_coef).float().mean().item())
 
-                if args.target_kl is not None and approx_kl > args.target_kl:
+                eff_target_kl = 0.02  # tighter than args.target_kl to curb rising clipfrac
+                if approx_kl > eff_target_kl:
                     early_stop = True
                     break
 
