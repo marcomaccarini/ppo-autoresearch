@@ -289,7 +289,7 @@ def main():
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                ent_coef = 0.02  # doubled: policy_loss≈0, entropy still drifting; need stronger signal
+                ent_coef = 0.015  # reduced from 0.02; entropy rising to -1.89, slow the drift
                 loss = pg_loss - ent_coef * entropy_loss + v_loss * 0.3  # reduced from 0.5; EV=0.97 critic already excellent
 
                 optimizer.zero_grad()
