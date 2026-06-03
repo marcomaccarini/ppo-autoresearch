@@ -289,7 +289,7 @@ def main():
 
                 entropy_loss = entropy.mean()
                 ent_coef = 0.02  # restore for final 3 segs; entropy stable ~-1.02, strengthen signal
-                loss = pg_loss - ent_coef * entropy_loss + v_loss * 0.3  # reduced from 0.5; EV=0.97 critic already excellent
+                loss = pg_loss - ent_coef * entropy_loss + v_loss * args.vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
