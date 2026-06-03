@@ -21,6 +21,7 @@ To set up a new experiment, work with the user to:
 
 ## Launch command
 
+Use conda environment called "maniskill".
 Use the user's command. By default it runs **one 1M-step segment and exits**:
 
 ```bash
@@ -151,6 +152,8 @@ Status values:
 - `crash`: code crashed/OOM/NaN and had to be reverted
 - `complete`: run reached 20M steps
 
+Plot all the stats also to wandb: --wandb-entity leon-pura --wandb-project-name ppo-autoresearch
+
 ## Intervention loop
 
 The run lives on a dedicated branch, for example `autoresearch-ppo/jun3`.
@@ -202,3 +205,4 @@ All else equal, simpler is better. A small success-rate gain from a clean schedu
 ## NEVER STOP
 
 Once the segmented loop begins, do not pause to ask the human whether to continue. Continue until the run reaches 20M steps or the human manually interrupts you.
+
