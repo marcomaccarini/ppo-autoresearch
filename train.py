@@ -162,10 +162,9 @@ def main():
             torch.save(agent.state_dict(), model_path)
             print(f"model saved to {model_path}")
 
-        if args.anneal_lr:
-            frac = 1.0 - (iteration - 1.0) / args.num_iterations
-            lrnow = frac * args.learning_rate
-            optimizer.param_groups[0]["lr"] = lrnow
+        # Anneal LR over the full 20M-step run to stabilise late training
+        lr_frac = max(1.0 - global_step / args.total_timesteps, 0.0)
+        optimizer.param_groups[0]["lr"] = lr_frac * args.learning_rate
 
         rollout_time = time.time()
         agent.eval()
