@@ -289,7 +289,8 @@ def main():
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                ent_coef = 0.01  # counter fast entropy collapse seen in seg 1 (6.4->4.6 nats)
+                loss = pg_loss - ent_coef * entropy_loss + v_loss * args.vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
