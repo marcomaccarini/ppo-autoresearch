@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import shutil
 import subprocess
 import time
 
@@ -24,6 +25,8 @@ from prepare import (
     summarize_evals,
 )
 
+
+SEGMENT_STEPS = 1_000_000
 
 _SEGMENT_COLS = [
     "segment", "global_step", "commit", "eval_success_rate", "eval_return_mean",
@@ -119,11 +122,27 @@ def main():
 
     clip_action = make_action_clipper(envs, device)
 
-    if args.checkpoint:
+    ckpt_dir = f"runs/{run_name}/checkpoints"
+    latest_ckpt = os.path.join(ckpt_dir, "latest.pt")
+
+    if os.path.exists(latest_ckpt):
+        ckpt = torch.load(latest_ckpt, map_location=device)
+        agent.load_state_dict(ckpt["agent"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        global_step = ckpt["global_step"]
+        print(f"Resumed from {latest_ckpt}: global_step={global_step}")
+    elif args.checkpoint:
         agent.load_state_dict(torch.load(args.checkpoint, map_location=device))
+
+    segment_end_step = min(global_step + SEGMENT_STEPS, args.total_timesteps)
+    print(f"Segment: global_step={global_step} -> {segment_end_step}")
 
     eval_history = []
     _eval_count = 0
+    tsv_path = f"runs/{run_name}/segment_metrics.tsv"
+    if os.path.exists(tsv_path):
+        with open(tsv_path) as f:
+            _eval_count = max(0, sum(1 for _ in f) - 1)
     _last_diag: dict = {}
 
     for iteration in range(1, args.num_iterations + 1):
@@ -314,6 +333,9 @@ def main():
 
         print("SPS:", sps)
 
+        if global_step >= segment_end_step:
+            break
+
     if not args.evaluate:
         # Final deterministic eval so the summary always reflects the final policy.
         metrics = evaluate_policy(agent, eval_envs, args, device, global_step, logger, start_time)
@@ -322,9 +344,15 @@ def main():
         _append_segment_metrics(run_name, _eval_count, metrics, _last_diag, eval_history, start_time)
 
         if args.save_model:
-            model_path = f"runs/{run_name}/final_ckpt.pt"
-            torch.save(agent.state_dict(), model_path)
-            print(f"model saved to {model_path}")
+            os.makedirs(ckpt_dir, exist_ok=True)
+            if os.path.exists(latest_ckpt):
+                shutil.copy2(latest_ckpt, os.path.join(ckpt_dir, "before_segment.pt"))
+            torch.save({"global_step": global_step, "agent": agent.state_dict(), "optimizer": optimizer.state_dict()}, latest_ckpt)
+            print(f"Segment checkpoint saved: {latest_ckpt} (global_step={global_step})")
+            if global_step >= args.total_timesteps:
+                model_path = f"runs/{run_name}/final_ckpt.pt"
+                torch.save(agent.state_dict(), model_path)
+                print(f"model saved to {model_path}")
         if logger is not None:
             logger.close()
 
