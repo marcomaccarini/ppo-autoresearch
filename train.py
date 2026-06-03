@@ -289,7 +289,7 @@ def main():
                     v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
                 entropy_loss = entropy.mean()
-                ent_coef = 0.01  # counter fast entropy collapse seen in seg 1 (6.4->4.6 nats)
+                ent_coef = 0.02  # doubled: policy_loss≈0, entropy still drifting; need stronger signal
                 loss = pg_loss - ent_coef * entropy_loss + v_loss * args.vf_coef
 
                 optimizer.zero_grad()
